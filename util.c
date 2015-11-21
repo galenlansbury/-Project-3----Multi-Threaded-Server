@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <pthread.h>
 
 #include "util.h"
 #include "seats.h"
@@ -55,6 +56,7 @@ void parse_request(int connfd, struct request* req)
     if (strncmp(instr, "GET", 3) != 0) {
         writenbytes(connfd, bad_request, strlen(bad_request));
         close(connfd);
+        req->resource = NULL;
         return;
     }
 
@@ -64,7 +66,7 @@ void parse_request(int connfd, struct request* req)
     {
         file[i] = buf[j];
         i++;
-	        j++;
+        j++;
     }
     j++;
     file[i] = '\0';
@@ -106,8 +108,6 @@ void parse_request(int connfd, struct request* req)
     req->customer_priority = parse_int_arg(file, "priority=");
 }
 
-
-
 void process_request(int connfd, struct request* req)
 {
     char *ok_response = "HTTP/1.0 200 OK\r\n"\
@@ -121,6 +121,9 @@ void process_request(int connfd, struct request* req)
     int fd;
     char buf[BUFSIZE+1];
     int length = strlen(req->resource);
+    if (req->resource == NULL){
+        return;
+    }
     // Check if the request is for one of our operations
     if (strncmp(req->resource, "list_seats", length) == 0)
     {  

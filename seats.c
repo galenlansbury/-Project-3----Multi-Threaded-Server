@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-
+#include <pthread.h>
 #include "seats.h"
 
 seat_t* seat_header = NULL;
@@ -17,6 +17,7 @@ char seat_state_to_char(seat_state_t);
 
 void list_seats(char* buf, int bufsize) //If an action in the form of an event call is made the buffer is overwritten here
 {
+	//since the buffer is unique to the thread, we aren't worrying about locks
     seat_t* curr = seat_header;
     int index = 0;
     while(curr != NULL && index < bufsize+ strlen("%d %c,")) // for integer and then a char
@@ -33,20 +34,25 @@ void list_seats(char* buf, int bufsize) //If an action in the form of an event c
         snprintf(buf, bufsize, "No seats not found\n\n"); //the no seats found is additional stuff that is appended onto the back
 }
 
+//if we are changing the contents of the specific seat structure we will place a lock on it
 void view_seat(char* buf, int bufsize,  int seat_id, int customer_id, int customer_priority)
 {
     seat_t* curr = seat_header;
-    while(curr != NULL)
+    while(curr != NULL)  //basically you are iterating through linked list until you stumble across right one
     {
-        if(curr->id == seat_id) //basically you are iterating through linked list until you stumble across right one
+        if(curr->id == seat_id)
 
         {
             if(curr->state == AVAILABLE || (curr->state == PENDING && curr->customer_id == customer_id))
             {
+				pthread_mutex_lock(&(curr->lock)); //if we found a match we wanna lock down this seat while we make a change to memory
+
                 snprintf(buf, bufsize, "Confirm seat: %d %c ?\n\n",
-                        curr->id, seat_state_to_char(curr->state));
+								curr->id, seat_state_to_char(curr->state));
                 curr->state = PENDING;
                 curr->customer_id = customer_id;
+
+				pthread_mutex_unlock(&(curr->lock)); //we're done changin the critical space so we are going to unlcok
             }
             else
             {
@@ -70,11 +76,14 @@ void confirm_seat(char* buf, int bufsize, int seat_id, int customer_id, int cust
         {
             if(curr->state == PENDING && curr->customer_id == customer_id )
             {
+				pthread_mutex_lock(&(curr->lock));  //LOCK
                 snprintf(buf, bufsize, "Seat confirmed: %d %c\n\n",
                         curr->id, seat_state_to_char(curr->state));
                 curr->state = OCCUPIED;
+
+				pthread_mutex_unlock(&(curr->lock)); //UNLOCK
             }
-            else if(curr->customer_id != customer_id )
+            else if(curr->customer_id != customer_id ) //if the current customer is trying to reserver a seat that is not reservered fr him
             {
                 snprintf(buf, bufsize, "Permission denied - seat held by another user\n\n");
             }
@@ -92,6 +101,10 @@ void confirm_seat(char* buf, int bufsize, int seat_id, int customer_id, int cust
     return;
 }
 
+
+//This also is called from the Seat Confirmation page to cancel a pending seat reservation. 
+//This can only be called when the same user has placed the seat into the pending (P) state, and returns the seat to the available (A) state.
+
 void cancel(char* buf, int bufsize, int seat_id, int customer_id, int customer_priority)
 {
     seat_t* curr = seat_header;
@@ -101,10 +114,14 @@ void cancel(char* buf, int bufsize, int seat_id, int customer_id, int customer_p
         {
             if(curr->state == PENDING && curr->customer_id == customer_id )
             {
+
+				pthread_mutex_lock(&(curr->lock));  //LOCK
                 snprintf(buf, bufsize, "Seat request cancelled: %d %c\n\n",
                         curr->id, seat_state_to_char(curr->state));
                 curr->state = AVAILABLE;
                 curr->customer_id = -1;
+
+				pthread_mutex_unlock(&(curr->lock)); //UNLOCK
             }
             else if(curr->customer_id != customer_id )
             {
@@ -124,6 +141,7 @@ void cancel(char* buf, int bufsize, int seat_id, int customer_id, int customer_p
     return;
 }
 
+//This is called at the very beginning and therefore needs not to have any locks since nothing is being writtten to data
 void load_seats(int number_of_seats)
 {
     seat_t* curr = NULL;
@@ -135,6 +153,7 @@ void load_seats(int number_of_seats)
         temp->customer_id = -1;
         temp->state = AVAILABLE;
         temp->next = NULL;
+        pthread_mutex_init((&temp->lock),NULL);
         
         if (seat_header == NULL)
         {

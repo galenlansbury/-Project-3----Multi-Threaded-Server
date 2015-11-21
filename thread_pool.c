@@ -1,10 +1,8 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
-
+#include <stdio.h>
 #include "thread_pool.h"
-#include "seats.h"
-#include "util.h"
 
 /**
  *  @struct threadpool_task
@@ -32,15 +30,15 @@ struct pool_t {
   pthread_t *threads;
   pool_task_t *queue;
   int thread_count;
-  int queue_used; //keep track of size of the queue
+  int queue_used;
   int task_queue_size_limit;
   int queue_front;
   int queue_rear;
   int close;
 };
 
-static void *thread_do_work(void *pool);
-void * dowork(void* fd);
+static void *thread_do_work(void *poo);
+
 
 /*
  * Create a threadpool, initialize variables, etc
@@ -48,24 +46,25 @@ void * dowork(void* fd);
  */
 pool_t *pool_create(int queue_size, int num_threads)
 {
+  int i = 0;
   pool_t *pl = (pool_t*)malloc(sizeof(pool_t));
   pthread_mutex_init(&(pl->lock), NULL);
   pthread_cond_init (&(pl->not_empty), NULL);
   pthread_cond_init (&(pl->not_full), NULL);
-  pl->thread_count = 0;
+  pl->close = 0;
+  pl->thread_count = MAX_THREADS;
   pl->queue_front = 0;
   pl->queue_rear = 0;
   pl->queue_used = 0;
-  pl->task_queue_size_limit = 20;
+  pl->task_queue_size_limit = queue_size;
   pl->threads = (pthread_t *)malloc(sizeof(pthread_t) * MAX_THREADS);
   pl->queue = (pool_task_t *)malloc(sizeof(pool_task_t) * pl->task_queue_size_limit);
-  for(int i = 0; i < MAX_THREADS; i++)
+  for(i = 0; i < MAX_THREADS; i++)
   {
     pthread_create(&(pl->threads[i]),NULL, thread_do_work, (void*)pl);
   }
   return pl;
 }
-
 
 
 /*
@@ -75,24 +74,22 @@ pool_t *pool_create(int queue_size, int num_threads)
 int pool_add_task(pool_t *pool, void (*function)(void *), void *argument)
 {
   int err = 0;
-  pthread_mutex_lock(&(pool->lock)); //need to protect while altering the thread pool
-
-  while(pool->queue_used == pool->task_queue_size_limit) //in the event that there is no longer any space, program will wait for space to open up and block incoming requests
+  pthread_mutex_lock(&(pool->lock));
+  while(pool->queue_used == pool->task_queue_size_limit)
   {
-    pthread_cond_wait(&(pool->not_full),&(pool->lock)); //not full must be signaled upon completion of every thread
+    pthread_cond_wait(&(pool->not_full),&(pool->lock));
   }
-
-  (pool->queue[pool->queue_rear]).function = function; //records the function associated with the job
-  (pool->queue[pool->queue_rear]).argument = argument; //and the argument
-
-  pool->queue_rear = (pool->queue_rear+1) % pool->task_queue_size_limit; //this will increase the size of the buffer
-  pool->queue_used++; //will make the used more
-
-  pthread_cond_broadcast(&(pool->not_empty)); //we usse broadcast because there are many threads waiting for a ready
+  (pool->queue[pool->queue_rear]).function = function;
+  (pool->queue[pool->queue_rear]).argument = argument;
+  pool->queue_rear = (pool->queue_rear+1) % pool->task_queue_size_limit;
+  pool->queue_used++;
+  printf("I am the %d th in the queue\n",pool->queue_rear);
+  pthread_cond_broadcast(&(pool->not_empty));
   pthread_mutex_unlock(&(pool->lock));     
-
   return err;
 }
+
+
 
 /*
  * Destroy the threadpool, free all memory, destroy treads, etc
@@ -100,63 +97,68 @@ int pool_add_task(pool_t *pool, void (*function)(void *), void *argument)
  */
 int pool_destroy(pool_t *pool)
 {
+    int i = 0;
     int err = 0;
- 
+    int rc;
+    void *status;
+    pthread_mutex_lock(&(pool->lock));
+    pool->close = 1;
+    pool->queue_used += pool->thread_count+1; 
+    printf("Now we have %d in da queue\n", pool->queue_used);
+    pthread_cond_broadcast(&(pool->not_empty));
+    pthread_mutex_unlock(&(pool->lock));
+    for(i = 0; i< pool->thread_count; i++)
+    {
+        rc=pthread_join(pool->threads[i],&status);
+    }
+    free(pool->threads);
+    free(pool->queue);
+    pthread_mutex_destroy(&pool->lock);
+    pthread_cond_destroy(&pool->not_empty);
+    pthread_cond_destroy(&pool->not_full);
+    free(pool);
     return err;
 }
 
 
-/*
- * Work loop for threads. Should be passed into the pthread_create() method.
- *
- */
-void * dowork(void* fd)
-{
-        int connfd = *((int*)fd); //will dereference the pointer to a page descriptor
-        struct request req;
-        // parse_request fills in the req struct object
-        parse_request(connfd, &req);
-        // process_request reads the req struct and processes the command
-        process_request(connfd, &req);
-        close(connfd);
-
-}
 
 /*
  * Work loop for threads. Should be passed into the pthread_create() method.
  *
  */
-static void *thread_do_work(void *pool)
+
+static void *thread_do_work(void *poo)
 { 
 	//these threads will constantly be running
     while(1) {
-
+      printf("I am a thread\n");
+      pool_t *pool = (pool_t*)poo;
 		pthread_mutex_lock(&(pool->lock)); //must lock this because we are working with the worker queue
-		if((pool->queue_used) == 0) //if worker queue is empty, put thread to sleep until new tasks are added to the worker queue
+		while((pool->queue_used) == 0) //if worker queue is empty, put thread to sleep until new tasks are added to the worker queue
 		{
 			pthread_cond_wait(&(pool->not_empty),&(pool->lock));
 		}
-		//if worker queue is not empty than complete the first task in the queue
-		
-		//void * dowork(void* fd)
-		 // (pool->queue[pool->queue_rear]).function = function; 
-		//(pool->queue[pool->queue_rear]).argument = argument; 
-
+    printf("Yeah, my turn\n");
+    if(pool->close == 1)
+    {
+        pthread_mutex_unlock(&(pool->lock));
+        pthread_exit(NULL);
+    }
 		pool_task_t temp = pool->queue[pool->queue_front]; //I don't know how to do dereference of the void function pointers specifically so I'm going to do this and use a temp
 
 		pool->queue_used--; //total amount of jobs completed is minus one
-		pool->queue_front++; //upon completing the task we want to increment the queue by one
+		pool->queue_front = (pool->queue_front + 1) % pool->task_queue_size_limit; //upon completing the task we want to increment the queue by one
 		pthread_cond_signal(&(pool->not_full)); ///signal that we are available to add another job
+    //(temp.function)(temp.argument);
 		pthread_mutex_unlock(&(pool->lock));    //release the lock before executing the function
 
 		//execute the actual function simultaneously with any other threads
 		(temp.function)(temp.argument);
 	}
 
+    
+
     pthread_exit(NULL);
     return(NULL);
+
 }
-
-// TODO: Declare your threadpool!
-
-
