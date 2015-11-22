@@ -199,7 +199,6 @@ void cancel(char* buf, int bufsize, int seat_id, int customer_id, int customer_p
                         curr->id, seat_state_to_char(curr->state));
                 curr->state = AVAILABLE;
                 curr->customer_id = -1;
-
 				pthread_mutex_unlock(&(curr->lock)); //UNLOCK
 
 				OpenSeat = curr; //this will set the open seat to the one that just got openned
