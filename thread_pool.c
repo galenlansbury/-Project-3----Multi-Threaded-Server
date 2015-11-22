@@ -15,7 +15,7 @@
  */
 
 #define MAX_THREADS 10
-#define STANDBY_SIZE 10
+//#define STANDBY_SIZE 10 check the semaphore.c for this
 
 typedef struct {
     void (*function)(void *);
@@ -75,6 +75,7 @@ int pool_add_task(pool_t *pool, void (*function)(void *), void *argument)
 {
   int err = 0;
   pthread_mutex_lock(&(pool->lock));
+
   while(pool->queue_used == pool->task_queue_size_limit)
   {
     pthread_cond_wait(&(pool->not_full),&(pool->lock));
